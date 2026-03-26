@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logo Card Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        .drop-zone {
+            border: 2px dashed #cbd5e1;
+            transition: all 0.3s ease;
+        }
+        .drop-zone.dragging {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        canvas {
+            display: none;
+        }
+        .preview-card {
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen font-sans text-slate-900">
+
+    <div class="max-w-4xl mx-auto py-12 px-4">
+        <header class="mb-10 text-center">
+            <h1 class="text-4xl font-extrabold tracking-tight text-slate-900 mb-2">Logo Card Studio</h1>
+            <p class="text-lg text-slate-600">Batch convert logos to clean 400x400 rounded cards.</p>
+        </header>
+
+        <!-- Configuration Controls -->
+        <div class="bg-white p-6 rounded-2xl shadow-sm mb-8 grid grid-cols-1 md:grid-cols-3 gap-6 border border-slate-200">
+            <div>
+                <label class="block text-sm font-semibold mb-2 text-slate-700">Internal Padding (%)</label>
+                <input type="range" id="paddingRange" min="0" max="40" value="15" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer">
+                <div class="flex justify-between text-xs text-slate-500 mt-1">
+                    <span>0%</span>
+                    <span id="paddingVal">15%</span>
+                    <span>40%</span>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-semibold mb-2 text-slate-700">Corner Radius (px)</label>
+                <input type="range" id="radiusRange" min="0" max="100" value="40" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer">
+                <div class="flex justify-between text-xs text-slate-500 mt-1">
+                    <span>Square</span>
+                    <span id="radiusVal">40px</span>
+                    <span>Round</span>
+                </div>
+            </div>
+            <div class="flex items-end">
+                <button id="downloadAllBtn" disabled class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-bold py-3 px-6 rounded-xl transition-all shadow-lg shadow-blue-200 disabled:shadow-none flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    Download All (.zip)
+                </button>
+            </div>
+        </div>
+
+        <!-- Drop Zone -->
+        <div id="dropZone" class="drop-zone rounded-3xl p-12 text-center cursor-pointer bg-white mb-8">
+            <input type="file" id="fileInput" multiple accept="image/*" class="hidden">
+            <div class="flex flex-col items-center">
+                <div class="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-4">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
+                </div>
+                <h3 class="text-xl font-bold text-slate-800">Drop logos here</h3>
+                <p class="text-slate-500 mt-1">PNG, JPG, SVG, or WebP</p>
+                <button class="mt-4 text-blue-600 font-semibold hover:text-blue-700">or browse files</button>
+            </div>
+        </div>
+
+        <!-- Preview Grid -->
+        <div id="previewGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
+            <!-- Cards will be injected here -->
+        </div>
+
+        <canvas id="processingCanvas" width="400" height="400"></canvas>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const dropZone = document.getElementById('dropZone');
+        const previewGrid = document.getElementById('previewGrid');
+        const paddingRange = document.getElementById('paddingRange');
+        const radiusRange = document.getElementById('radiusRange');
+        const downloadAllBtn = document.getElementById('downloadAllBtn');
+        const canvas = document.getElementById('processingCanvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        let processedImages = [];
+
+        // UI Listeners
+        paddingRange.oninput = (e) => {
+            document.getElementById('paddingVal').innerText = e.target.value + '%';
+            reprocessAll();
+        };
+        radiusRange.oninput = (e) => {
+            document.getElementById('radiusVal').innerText = e.target.value + 'px';
+            reprocessAll();
+        };
+
+        dropZone.onclick = () => fileInput.click();
+        dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragging'); };
+        dropZone.ondragleave = () => dropZone.classList.remove('dragging');
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragging');
+            handleFiles(e.dataTransfer.files);
+        };
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        async function handleFiles(files) {
+            const newFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+            if (newFiles.length === 0) return;
+
+            for (const file of newFiles) {
+                const img = await loadImage(URL.createObjectURL(file));
+                processedImages.push({ original: img, name: file.name });
+            }
+            reprocessAll();
+        }
+
+        async function reprocessAll() {
+            previewGrid.innerHTML = '';
+            const padding = parseInt(paddingRange.value) / 100;
+            const radius = parseInt(radiusRange.value);
+
+            if (processedImages.length > 0) downloadAllBtn.disabled = false;
+
+            for (let i = 0; i < processedImages.length; i++) {
+                const item = processedImages[i];
+                const resultDataUrl = processImage(item.original, padding, radius);
+                item.processedDataUrl = resultDataUrl;
+
+                const div = document.createElement('div');
+                div.className = "flex flex-col items-center animate-in fade-in slide-in-from-bottom-2 duration-300";
+                div.innerHTML = `
+                    <div class="w-full aspect-square preview-card rounded-lg bg-white overflow-hidden mb-2">
+                        <img src="${resultDataUrl}" class="w-full h-full object-contain">
+                    </div>
+                    <span class="text-[10px] text-slate-400 truncate w-full text-center">${item.name}</span>
+                `;
+                previewGrid.appendChild(div);
+            }
+        }
+
+        function processImage(img, paddingPct, radius) {
+            // 1. Find the Bounding Box (Trim)
+            const trimCanvas = document.createElement('canvas');
+            const tCtx = trimCanvas.getContext('2d', { willReadFrequently: true });
+            trimCanvas.width = img.width;
+            trimCanvas.height = img.height;
+            tCtx.drawImage(img, 0, 0);
+            
+            const bbox = getBoundingBox(tCtx, img.width, img.height);
+            const contentW = bbox.x2 - bbox.x1;
+            const contentH = bbox.y2 - bbox.y1;
+
+            // 2. Setup Final Canvas (400x400)
+            ctx.clearRect(0, 0, 400, 400);
+            
+            // Draw Background and Rounded Corners Mask
+            ctx.save();
+            ctx.beginPath();
+            ctx.roundRect(0, 0, 400, 400, [radius]);
+            ctx.clip();
+            
+            // Fill with white
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, 400, 400);
+
+            // 3. Calculate Fit
+            // We want to fit contentW/contentH into a square that accounts for padding
+            const safeArea = 400 * (1 - (paddingPct * 2));
+            const scale = Math.min(safeArea / contentW, safeArea / contentH);
+            
+            const drawW = contentW * scale;
+            const drawH = contentH * scale;
+            const offsetX = (400 - drawW) / 2;
+            const offsetY = (400 - drawH) / 2;
+
+            ctx.drawImage(
+                img, 
+                bbox.x1, bbox.y1, contentW, contentH, // Source
+                offsetX, offsetY, drawW, drawH         // Destination
+            );
+
+            ctx.restore();
+            return canvas.toDataURL('image/png');
+        }
+
+        function getBoundingBox(context, w, h) {
+            const pixels = context.getImageData(0, 0, w, h).data;
+            let x1 = w, y1 = h, x2 = 0, y2 = 0;
+            
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const alpha = pixels[(y * w + x) * 4 + 3];
+                    // If not fully transparent and not pure white (threshold check)
+                    const r = pixels[(y * w + x) * 4];
+                    const g = pixels[(y * w + x) * 4 + 1];
+                    const b = pixels[(y * w + x) * 4 + 2];
+                    
+                    const isWhite = r > 250 && g > 250 && b > 250;
+                    
+                    if (alpha > 10 && !isWhite) {
+                        if (x < x1) x1 = x;
+                        if (y < y1) y1 = y;
+                        if (x > x2) x2 = x;
+                        if (y > y2) y2 = y;
+                    }
+                }
+            }
+            
+            // Fallback if image is empty or pure white
+            if (x2 < x1) return { x1: 0, y1: 0, x2: w, y2: h };
+            
+            return { x1, y1, x2: x2 + 1, y2: y2 + 1 };
+        }
+
+        function loadImage(url) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.src = url;
+            });
+        }
+
+        downloadAllBtn.onclick = async () => {
+            const zip = new JSZip();
+            processedImages.forEach((item, index) => {
+                const base64Data = item.processedDataUrl.replace(/^data:image\/(png|jpg);base64,/, "");
+                const fileName = item.name.split('.')[0] + "_card.png";
+                zip.file(fileName, base64Data, { base64: true });
+            });
+
+            const content = await zip.generateAsync({ type: "blob" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(content);
+            link.download = "logo_cards.zip";
+            link.click();
+        };
+    </script>
+</body>
+</html>
